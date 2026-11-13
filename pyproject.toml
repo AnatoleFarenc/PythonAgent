@@ -9,5 +9,6 @@ dependencies = [
     "tree_sitter_python",
     "numpy",
     "rank_bm25",
-    "sentence_transformers"
+    "sentence_transformers",
+    "vllm>=0.33.0",
 ]
