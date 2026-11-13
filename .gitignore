@@ -18,6 +18,7 @@ htmlcov/
 data/
 
 Pac-Man/
+vllm-0.10.1
 
 .env
 .env.*
