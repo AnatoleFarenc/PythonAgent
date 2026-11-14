@@ -23,5 +23,17 @@ sandbox = "src.sandbox.cli:main"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = [
+    "isolation: needs Docker, gVisor (runsc) and builds the sandbox image",
+]
