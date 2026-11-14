@@ -7,19 +7,12 @@ from mcp.client.stdio import stdio_client
 from typing import Dict, List
 from contextlib import AsyncExitStack
 from urllib.parse import urlparse
+from .errors import McpConnectionError, McpToolError
 import shlex
 import asyncio
 import os
 import sys
 import shutil
-
-
-class McpToolError(Exception):
-    """Raised when an MCP tool reports an error."""
-
-
-class McpConnectionError(Exception):
-    """Raised when the MCP server cannot be reached or initialized."""
 
 
 def check_server_command(parts: List[str]) -> None:

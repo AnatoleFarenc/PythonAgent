@@ -5,6 +5,8 @@ import sys
 
 # Worker
 START_WORK_TIMEOUT = 10
+READ_MESSAGE_TIMEOUT = 5
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 # Bridge
 TIMEOUT_CALL_TOOL = 30
@@ -24,9 +26,6 @@ JSON_TO_PY: Dict[Any, str] = {
     "string": "str", "integer": "int", "number": "float",
     "boolean": "bool", "object": "dict", "null": "None"
 }
-
-MCP_COMMAND_MBPP = "python mcp_tools_mbpp.py"
-MCP_COMMAND_SWE = "python mcp_tools_swebench.py --container smith-ID"
 
 # REPL
 CONTINUATION = ("else", "elif", "except", "finally")

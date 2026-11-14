@@ -153,6 +153,21 @@ def apply_memory_restricted(max_memory_mb: int) -> None:
         print(f"Warning: memory limit not applied ({e})", file=sys.stderr)
 
 
+def apply_process_limit(max_processes: int) -> None:
+    """Cap the number of processes of the worker user (RLIMIT_NPROC).
+
+    Under gVisor the count is local to the sandbox, so fork() fails with
+    EAGAIN instead of making the whole container crash on the pids limit.
+    With runc or the local backend it counts every process of the user on
+    the host.
+    """
+    try:
+        resource.setrlimit(resource.RLIMIT_NPROC,
+                           (max_processes, max_processes))
+    except (ValueError, OSError) as e:
+        print(f"Warning: process limit not applied ({e})", file=sys.stderr)
+
+
 def truncke_output(output: str, max_len: int) -> Tuple[str, bool]:
     """Cut an output to max_len characters.
 

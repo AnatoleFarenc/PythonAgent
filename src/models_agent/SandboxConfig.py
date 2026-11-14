@@ -1,5 +1,7 @@
 """Configuration of the sandbox and its JSON loader."""
-from pydantic import BaseModel, Field, ValidationError
+from .IsolationConfig import IsolationConfig
+
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from typing import List
 from pathlib import Path
 
@@ -25,9 +27,10 @@ class SandboxConfig(BaseModel):
         ]
     )
     allowed_directories: List[str] = Field(
-        default_factory=lambda: [
-            "/testbed", "/tmp/agent",
-        ]
+        default_factory=list,
+        description="Set by the host from the mounts of the container "
+                    "(container.visible_directories): a value given in a "
+                    "config file is replaced"
     )
     authorized_builtins: List[str] = Field(
         default_factory=lambda: [
@@ -79,13 +82,30 @@ class SandboxConfig(BaseModel):
                               description="global name space")
     max_tool_time_seconds: int = 5
     max_memory_mb: int = 512
+    max_processes: int = Field(
+        default=32, ge=1,
+        description="RLIMIT_NPROC of the worker: fork() fails with a clear "
+                    "error before the container pids limit is reached"
+    )
     max_len_output: int = 4000
     max_len_tool_output: int = 1000000
     max_execution_time_seconds: int = 30
 
 
-def load_config(path_sandbox_config: str) -> SandboxConfig:
-    """Load the sandbox configuration from a JSON file.
+class SandboxFile(BaseModel):
+    """Content of a configuration file: both sections are optional.
+
+    {"sandbox": {...}, "isolation": {...}}
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
+    isolation: IsolationConfig = Field(default_factory=IsolationConfig)
+
+
+def load_config(path_sandbox_config: str) -> SandboxFile:
+    """Load the sandbox and isolation configuration from a JSON file.
 
     Args:
         path_sandbox_config: Path of the JSON file.
@@ -95,7 +115,7 @@ def load_config(path_sandbox_config: str) -> SandboxConfig:
         RuntimeError: If the file cannot be read.
     """
     try:
-        return SandboxConfig.model_validate_json(
+        return SandboxFile.model_validate_json(
             Path(path_sandbox_config).read_text()
         )
     except ValidationError as e:

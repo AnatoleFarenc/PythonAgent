@@ -1,6 +1,6 @@
 """Wrappers that expose MCP tools as Python functions in the worker."""
 from ..models_agent.ToolSpec import ToolSpec
-from .McpClient import McpToolError
+from .errors import McpToolError
 from .protocol import (
     ToolCallMsg, ToolResultMsg,
     recv_main_message, send_message

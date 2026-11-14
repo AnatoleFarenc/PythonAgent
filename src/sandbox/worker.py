@@ -3,7 +3,7 @@ from ..models_agent.ExecutionResult import ExecutionResult, FinalAnswerSignal
 from ..models_agent.SandboxConfig import SandboxConfig
 from ..models_agent.ToolSpec import ToolSpec
 from .restricted_sandbox import (
-    build_builtins, apply_memory_restricted,
+    build_builtins, apply_memory_restricted, apply_process_limit,
     restricted_conn
 )
 from .wrapper_tools import make_tools_wrapper
@@ -11,9 +11,9 @@ from .manual_manager import make_tool_help
 from .protocol import (
     send_message, recv_main_message,
     StdoutMsg, ReadyMsg, StopMsg,
-    ResultMsg, CodeMsg
+    ResultMsg, CodeMsg, recv_init_message
 )
-from .channel import Channel
+from .channel import Channel, StreamChannel
 
 from typing import Dict, NoReturn, Any
 from contextlib import redirect_stdout
@@ -89,6 +89,7 @@ def code_worker_loop(
     os.environ.clear()
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     apply_memory_restricted(config.max_memory_mb)
+    apply_process_limit(config.max_processes)
     restricted_conn()
     namespace: Dict = {
         "__builtins__": build_builtins(config),
@@ -161,3 +162,31 @@ def code_worker_loop(
                 final_answer=exec_res.final_answer
             )
         )
+
+
+def main() -> None:
+    """Entry point when the worker runs as a program.
+
+    The protocol uses the original stdin/stdout. They are moved to new
+    descriptors, then fd 0 is replaced by /dev/null and fd 1 by stderr, so
+    that nothing else can read or write the protocol by accident.
+    """
+    proto_in = os.dup(0)
+    proto_out = os.dup(1)
+    devnull = os.open(os.devnull, os.O_RDONLY)
+    os.dup2(devnull, 0)
+    os.close(devnull)
+    os.dup2(2, 1)
+
+    conn = StreamChannel(proto_in, proto_out)
+    try:
+        init = recv_init_message(conn)
+        code_worker_loop(conn, init.config, init.tools, init.echo)
+    except EOFError:
+        pass
+    finally:
+        conn.close()
+
+
+if __name__ == "__main__":
+    main()

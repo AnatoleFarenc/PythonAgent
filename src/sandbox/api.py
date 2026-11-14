@@ -1,24 +1,35 @@
 """Public sandbox API: run LLM generated code in a worker process."""
 from ..models_agent.ExecutionResult import ExecutionResult
 from ..models_agent.SandboxConfig import SandboxConfig
+from ..models_agent.IsolationConfig import IsolationConfig
 from .restricted_sandbox import truncke_output
 from .McpBrige import McpBridge
 from ..models_agent.ToolSpec import ToolSpec
 from .manual_manager import build_manual
-from .worker import code_worker_loop
-from .config import START_WORK_TIMEOUT
+from .config import (
+    START_WORK_TIMEOUT, READ_MESSAGE_TIMEOUT,
+    PROJECT_ROOT, RED, RESET
+)
+from .container import (
+    DOCKER_CLI_ENV, build_worker_command, check_workspace,
+    kill_container, visible_directories
+)
 from .protocol import (
     CodeMsg, StdoutMsg, ToolCallMsg,
     ResultMsg, ToolResultMsg, ReadyMsg,
-    StopMsg,
+    StopMsg, InitMsg,
     recv_worker_message, send_message
 )
+from .channel import StreamChannel
 
 from typing import Any, Dict, List
-import multiprocessing as mp
+from pydantic import ValidationError
 import time
 import concurrent.futures
-from pydantic import ValidationError
+import os
+import subprocess
+import sys
+import uuid
 
 
 class Sandbox:
@@ -34,20 +45,39 @@ class Sandbox:
                  mcp_command: str | None = None,
                  sandbox_config: SandboxConfig | None = None,
                  echo: bool = False,
-                 mcp_env: Dict[str, str] | None = None
+                 mcp_env: Dict[str, str] | None = None,
+                 isolation: IsolationConfig | None = None
                  ) -> None:
         """Connect to the MCP server and start the worker process.
 
         Args:
             mcp_command: Command line that starts the MCP server.
             sandbox_config: Sandbox configuration, the default one if None.
+            echo: True to print the value of expression statements.
+            mcp_env: Environment of the MCP server.
+            isolation: Isolation of the worker, the default one (gVisor
+                container, no workspace) if None.
 
         Raises:
+            ValueError: If the workspace cannot be mounted safely.
             McpConnectionError: If the MCP server cannot be reached.
             RuntimeError: If the worker process fails to start.
         """
         self._echo = echo
-        self.__config = sandbox_config or SandboxConfig()
+        self._isolation = isolation or IsolationConfig()
+        if self._isolation.workspace is not None:
+            # Fail early, before connecting to MCP or starting anything.
+            self._isolation = self._isolation.model_copy(update={
+                "workspace": check_workspace(self._isolation.workspace)
+            })
+        if self._isolation.backend == "local":
+            print(f"{RED}WARNING: local backend, the code is NOT isolated "
+                  f"from this machine{RESET}", file=sys.stderr)
+        # allowed_directories always matches what is really mounted.
+        self.__config = (sandbox_config or SandboxConfig()).model_copy(
+            update={"allowed_directories":
+                    visible_directories(self._isolation)}
+        )
         self._tools_list: Dict[str, ToolSpec] = {}
         self._mcp_bridge: McpBridge | None = None
 
@@ -71,43 +101,85 @@ class Sandbox:
             raise
 
     def _start_work_process(self) -> None:
-        """Start the worker process and wait for its "ready" message.
+        """Start the worker program and wait for its "ready" message.
+
+        Two pipes are created: the worker gets one end of each as its
+        stdin/stdout, the host keeps the other ends in a StreamChannel.
+        The worker starts with an empty environment, in its own session,
+        and receives its configuration in an InitMsg.
 
         Raises:
             RuntimeError: If the worker does not answer within
-                STARTUP_TIMEOUT seconds or dies during startup.
+                START_WORK_TIMEOUT seconds or dies during startup.
         """
-        ctx = mp.get_context("spawn")
-        self._conn, child_con = ctx.Pipe()
-        self._process = ctx.Process(
-            target=code_worker_loop,
-            args=(
-                child_con,
-                self.__config,
-                self._tools_list,
-                self._echo
-            ),
-            daemon=True
-        )
-        self._process.start()
-        child_con.close()
-        if not self._conn.poll(START_WORK_TIMEOUT):
-            self._process.kill()
-            self._conn.close()
-            self._process.join()
-            raise RuntimeError("The worker process failed to start")
+        to_worker_r, to_worker_w = os.pipe()        # hôte -> worker
+        from_worker_r, from_worker_w = os.pipe()    # worker -> hôte
+        self._container = f"sandbox-{uuid.uuid4().hex[:12]}"
+        docker = self._isolation.backend == "docker"
         try:
+            self._process = subprocess.Popen(
+                build_worker_command(self._container, self._isolation,
+                                     self.__config.max_memory_mb),
+                stdin=to_worker_r,
+                stdout=from_worker_w,
+                stderr=None,
+                cwd=PROJECT_ROOT,
+                env=DOCKER_CLI_ENV if docker else {},
+                close_fds=True,
+                start_new_session=True,
+            )
+        finally:
+            os.close(to_worker_r)
+            os.close(from_worker_w)
+        self._conn = StreamChannel(
+            from_worker_r, to_worker_w,
+            read_timeout=READ_MESSAGE_TIMEOUT
+        )
+        try:
+            send_message(self._conn, InitMsg(
+                            config=self.__config,
+                            tools=self._tools_list,
+                            echo=self._echo
+                        ))
+            if not self._conn.poll(START_WORK_TIMEOUT):
+                raise RuntimeError("The worker process failed to start")
             message = recv_worker_message(self._conn)
             if not isinstance(message, ReadyMsg):
                 raise RuntimeError("unexpected first message")
-        except EOFError:
-            self._process.join()
-            self._conn.close()
+        except (EOFError, OSError) as e:
+            self._kill_worker()
             raise RuntimeError(
                 "The worker process died during startup "
-                f"(exit code {self._process.exitcode}), see "
-                "its traceback above"
-            )
+                f"(exit code {self._process.returncode}), "
+                "see its traceback above"
+            ) from e
+        except BaseException:
+            self._kill_worker()
+            raise
+
+    def _kill_worker(self) -> None:
+        """Kill the worker at once and close the channel.
+
+        With Docker, the process started by Popen is only the docker
+        client: the container itself is killed by its name.
+        """
+        if self._isolation.backend == "docker":
+            kill_container(self._container)
+        self._process.kill()
+        self._process.wait()
+        self._conn.close()
+
+    def _stop_worker(self) -> None:
+        """Ask the worker to stop, kill it if needed and close the channel."""
+        try:
+            send_message(self._conn, StopMsg())
+        except (EOFError, OSError):
+            pass
+        try:
+            self._process.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            self._kill_worker()
+        self._conn.close()
 
     def _restart_work_process(self) -> None:
         """Replace the worker by a new one with an empty namespace."""
@@ -239,18 +311,6 @@ class Sandbox:
     def get_manual(self) -> str:
         """Return the sandbox manual"""
         return build_manual(self.__config, self._tools_list)
-
-    def _stop_worker(self) -> None:
-        """Ask the worker to stop, kill it if needed and close the pipe."""
-        try:
-            send_message(self._conn, StopMsg())
-        except (EOFError, OSError):
-            pass
-        self._process.join(timeout=1)
-        if self._process.is_alive():
-            self._process.kill()
-            self._process.join()
-        self._conn.close()
 
     def close(self) -> None:
         """Stop the worker process and close the MCP connection."""
