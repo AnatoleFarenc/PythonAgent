@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import Any, List
 
 from model import ChunkModel
-from .HybridIndex import HybridIndex
+from .indexer.HybridIndex import HybridIndex
 from .chunking.chunking_tools_python import read_chunk
 from .config import (
     LLM_ENFORCE_EAGER, LLM_GPU_MEMORY_UTILIZATION, LLM_MAX_MODEL_LEN,

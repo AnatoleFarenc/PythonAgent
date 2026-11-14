@@ -1,13 +1,17 @@
-"""Hybrid retrieval: BM25 (keywords) + dense vectors, fused with RRF."""
+"""Hybrid retrieval: BM25 (keywords) + dense vectors, fused with RRF.
+
+When ``USE_EMBEDDING`` is False in config.py, only BM25 is used.
+"""
 
 from model import ChunkListModel, ChunkModel
+from ..config import USE_EMBEDDING
 from .indexer import Vectors, chunk_text, update_index
 
 import re
 import numpy as np
 from rank_bm25 import BM25Okapi  # type: ignore[import-untyped]
 from sentence_transformers import SentenceTransformer
-from typing import List
+from typing import List, Optional
 
 
 def tokenize(text: str) -> list[str]:
@@ -26,21 +30,29 @@ class HybridIndex:
 
     Attributes:
         chunks: Indexed chunks.
-        vectors: Normalised embeddings, row ``i`` belongs to chunk ``i``.
-        model: Embedding model used to encode the queries.
+        vectors: Normalised embeddings, row ``i`` belongs to chunk ``i``
+            (None when embeddings are disabled).
+        model: Embedding model used to encode the queries (None when
+            embeddings are disabled).
         bm25: BM25 index built on the chunk texts.
+        folder: Root folder the chunks come from.
     """
 
     def __init__(
             self, chunks: ChunkListModel,
-            vectors: Vectors, model: SentenceTransformer) -> None:
+            vectors: Optional[Vectors],
+            model: Optional[SentenceTransformer],
+            folder: str = "") -> None:
         """Build the BM25 index on top of precomputed vectors.
 
         Args:
             chunks: Chunks to index.
-            vectors: Their normalised embeddings (same order).
-            model: Model that produced *vectors*, used for queries.
+            vectors: Their normalised embeddings (same order), or None.
+            model: Model that produced *vectors*, used for queries, or
+                None for a BM25-only index.
+            folder: Root folder the chunks come from.
         """
+        self.folder = folder
         self.chunks = chunks
         self.vectors = vectors
         self.model = model
@@ -48,19 +60,23 @@ class HybridIndex:
             [tokenize(t) for t in get_texts_chunks(chunks)])
 
     @classmethod
-    def from_folder(cls, folder: str, model_name: str) -> "HybridIndex":
+    def from_folder(
+            cls, folder: str, model_name: str,
+            use_embedding: bool = USE_EMBEDDING) -> "HybridIndex":
         """Build the index of *folder*, re-encoding only modified files.
 
         Args:
             folder: Root folder of the code to index.
             model_name: Hugging Face name of the embedding model.
+            use_embedding: False to skip the embedding model entirely
+                (BM25 only: faster, less GPU memory, lower quality).
 
         Returns:
             The ready-to-use index.
         """
-        model = SentenceTransformer(model_name)
+        model = SentenceTransformer(model_name) if use_embedding else None
         chunks, vectors = update_index(folder, model, model_name)
-        return cls(chunks, vectors, model)
+        return cls(chunks, vectors, model, folder)
 
     def search(
             self, query: str,
@@ -70,6 +86,7 @@ class HybridIndex:
 
         BM25 and dense rankings are each cut to *pool* results, then
         merged with Reciprocal Rank Fusion: ``score = sum 1 / (rrf_k + rank)``.
+        Without embeddings, the BM25 ranking is returned directly.
 
         Args:
             query: Natural-language question.
@@ -82,6 +99,8 @@ class HybridIndex:
         """
         bm25_scores = self.bm25.get_scores(tokenize(query))
         bm25_rank = np.argsort(bm25_scores)[::-1][:pool]
+        if self.model is None or self.vectors is None:
+            return [self.chunks.chunks[i] for i in bm25_rank[:k]]
 
         q = self.model.encode(query, normalize_embeddings=True)
         dense_rank = np.argsort(self.vectors @ q)[::-1][:pool]

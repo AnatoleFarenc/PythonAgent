@@ -100,8 +100,27 @@ def chunk_char_range(chunk: ChunkModel) -> Tuple[int, int]:
     return start, start + length
 
 
+def from_root(path: str, root: str) -> str:
+    """Return *path* starting at the name of the indexed folder *root*.
+
+    ``src/rag/vllm-0.10.1/vllm/x.py`` with root ``src/rag/vllm-0.10.1``
+    gives ``vllm-0.10.1/vllm/x.py``, so it can be suffix-matched against
+    the dataset paths whatever the location of the indexed folder.
+
+    Args:
+        path: Path of a chunk's file, inside *root*.
+        root: Indexed folder ("" leaves *path* unchanged).
+
+    Returns:
+        The trimmed path.
+    """
+    skip = len(PurePosixPath(root).parts) - 1
+    return str(PurePosixPath(*PurePosixPath(path).parts[max(skip, 0):]))
+
+
 def source_found(
-    source: Source, retrieved: List[ChunkModel], min_iou: float
+    source: Source, retrieved: List[ChunkModel], min_iou: float,
+    root: str = "",
 ) -> bool:
     """Return True if one of the retrieved chunks matches *source*.
 
@@ -109,12 +128,13 @@ def source_found(
         source: Expected source (file path + character range).
         retrieved: Chunks returned by the index.
         min_iou: Minimum IoU for a chunk to count as a match.
+        root: Indexed folder, used to compare paths from its name on.
 
     Returns:
         True if a chunk of the same file overlaps *source* enough.
     """
     for chunk in retrieved:
-        if not check_path(source["file_path"], chunk.file):
+        if not check_path(source["file_path"], from_root(chunk.file, root)):
             continue
         c_start, c_end = chunk_char_range(chunk)
         if check_iou(
@@ -164,7 +184,7 @@ def find_recall_metric(
         retrieved = index.search(question["question"], k=k)
         nb_source_find = sum(
             1 for source in question["sources"]
-            if source_found(source, retrieved, min_iou)
+            if source_found(source, retrieved, min_iou, index.folder)
         )
         recall_lst.append(nb_source_find / len(question["sources"]))
     return sum(recall_lst) / len(recall_lst)

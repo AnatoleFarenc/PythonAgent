@@ -13,3 +13,14 @@ LLM_MAX_TOKENS = 512
 LLM_TEMPERATURE = 0.3
 LLM_TOP_P = 0.8
 LLM_ENFORCE_EAGER = True
+INTERFACE_LOG_FILE = ""
+
+
+# Ambeding
+AMBEDING_MODEL = "BAAI/bge-m3"
+# False: BM25 search only. Faster start, ~2.2 GB of GPU freed, no query
+# encoding, but lower retrieval quality (no semantic matching).
+USE_EMBEDDING = True
+
+# recall
+TEST_RECALL_FOLDER = "src/rag/vllm-0.10.1"
