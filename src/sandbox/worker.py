@@ -1,0 +1,163 @@
+"""Worker process of the sandbox that executes the code snippets."""
+from ..models_agent.ExecutionResult import ExecutionResult, FinalAnswerSignal
+from ..models_agent.SandboxConfig import SandboxConfig
+from ..models_agent.ToolSpec import ToolSpec
+from .restricted_sandbox import (
+    build_builtins, apply_memory_restricted,
+    restricted_conn
+)
+from .wrapper_tools import make_tools_wrapper
+from .manual_manager import make_tool_help
+from .protocol import (
+    send_message, recv_main_message,
+    StdoutMsg, ReadyMsg, StopMsg,
+    ResultMsg, CodeMsg
+)
+from .channel import Channel
+
+from typing import Dict, NoReturn, Any
+from contextlib import redirect_stdout
+import signal
+import keyword
+import ast
+import os
+
+
+class PipeWriter:
+    """File-like object that sends written text to the main process.
+
+    Used with redirect_stdout so that print() and sys.stdout.write() in
+    the worker are streamed through the pipe as ("stdout", text) messages.
+    """
+
+    def __init__(self, conn: Channel) -> None:
+        """Store the pipe connection to the main process."""
+        self._conn = conn
+
+    def write(self, text: str) -> int:
+        """Send text through the pipe and return its length."""
+        if text:
+            send_message(self._conn, StdoutMsg(text=text))
+        return len(text)
+
+    def flush(self) -> None:
+        """Do nothing, required by the file-like interface."""
+        pass
+
+
+def run_code(code: str, namespace: Dict, echo: bool) -> None:
+    """Execute code in the namespace.
+
+    With echo, each statement is run in "single" mode so that the value
+    of an expression is printed, like in a Python REPL.
+
+    Args:
+        code: Python source code to execute.
+        namespace: Globals of the execution.
+        echo: True to print the value of expression statements.
+    """
+    if not echo:
+        exec(code, namespace)
+        return
+    for node in ast.parse(code, "<string>", "exec").body:
+        exec(
+            compile(
+                ast.Interactive(body=[node]), "<string>", "single"),
+            namespace
+        )
+
+
+def code_worker_loop(
+        conn: Channel,
+        config: SandboxConfig,
+        tools: Dict[str, ToolSpec],
+        echo: bool
+        ) -> None:
+    """Run the worker process loop that executes code snippets.
+
+    Apply the memory and network restrictions, build the restricted
+    namespace (builtins, MCP tool wrappers, final_answer), then send
+    "ready" and execute each received snippet until None or EOF. Every
+    execution ends with a ("result", ExecutionResult) message.
+
+    Args:
+        conn: Pipe connection to the main process.
+        config: Sandbox configuration.
+        tools: MCP tools to expose in the namespace, indexed by name.
+        echo: True to print the value of expression statements.
+    """
+    os.environ.clear()
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    apply_memory_restricted(config.max_memory_mb)
+    restricted_conn()
+    namespace: Dict = {
+        "__builtins__": build_builtins(config),
+        "__name__": config.sandbox_name,
+    }
+
+    protected: Dict[str, Any] = {}
+    for spec in tools.values():
+        if not spec.name.isidentifier() or keyword.iskeyword(spec.name):
+            continue
+        protected[spec.name] = make_tools_wrapper(spec, conn)
+
+    if tools:
+        protected["tool_help"] = make_tool_help(tools)
+
+    state_final_answer: Dict = {}
+    state_final_answer["answer"] = None
+
+    def final_answer(value: Any) -> NoReturn:
+        """Record the final answer and stop the running code."""
+        state_final_answer["answer"] = str(value)
+        raise FinalAnswerSignal(value)
+    protected["final_answer"] = final_answer
+    namespace.update(protected)
+
+    send_message(conn, ReadyMsg())
+    while True:
+        try:
+            message = recv_main_message(conn)
+            if isinstance(message, StopMsg):
+                break
+            if not isinstance(message, CodeMsg):
+                raise RuntimeError(f"Unexpected message: {message!r}")
+            code = message.code
+        except EOFError:
+            break
+
+        state_final_answer["answer"] = None
+        namespace.update(protected)
+        buffer = PipeWriter(conn)
+        exec_res = ExecutionResult()
+        try:
+            with redirect_stdout(buffer):
+                run_code(code, namespace, echo)
+        except SystemExit:
+            exec_res.error = ("SystemExit: exit()/sys.exit() are not allowed "
+                              "in the sandbox. "
+                              "Call final_answer(...) to finish the task.")
+        except KeyboardInterrupt:
+            exec_res.error = (
+                "KeyboardInterrupt: raising it is not allowed in the "
+                "sandbox. Call final_answer(...) to finish the task."
+            )
+        except FinalAnswerSignal:
+            pass
+        except MemoryError:
+            exec_res.error = (
+                f"MemoryError: your code exceeded the memory limit "
+                f"({config.max_memory_mb} MB). Use less memory "
+                "(smaller data, generators, no huge lists)."
+            )
+        except Exception as e:
+            exec_res.error = f"Error {type(e).__name__}: {e}"
+
+        exec_res.final_answer = state_final_answer['answer']
+        send_message(
+            conn,
+            ResultMsg(
+                error=exec_res.error,
+                final_answer=exec_res.final_answer
+            )
+        )
