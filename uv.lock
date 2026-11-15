@@ -3290,7 +3290,10 @@ name = "pythonrag"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "mcp" },
     { name = "numpy" },
+    { name = "openai" },
+    { name = "python-dotenv" },
     { name = "rank-bm25" },
     { name = "sentence-transformers" },
     { name = "tree-sitter" },
@@ -3305,7 +3308,10 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "mcp", specifier = ">=2.3.0" },
     { name = "numpy" },
+    { name = "openai", specifier = ">=3.35.1" },
+    { name = "python-dotenv", specifier = ">=1.2.4" },
     { name = "rank-bm25" },
     { name = "sentence-transformers" },
     { name = "tree-sitter" },

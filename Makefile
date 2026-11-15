@@ -44,42 +44,63 @@ install:
 
 	@echo "\n$(SUCCESS)Project can now be run safely!$(RESET)"
 
-vllm_compile:
-	@echo "$(BOLD)Compiling vLLM...$(RESET)"
-	@uv pip install setuptools setuptools-scm wheel numpy
-	@SETUPTOOLS_SCM_PRETEND_VERSION=0.10.1 uv pip install -e data/raw/vllm-0.10.1 --no-build-isolation
-	@echo "$(GREEN)vLLM compilation complete!$(RESET)"
-
 run:
 	@uv run python -m src
 
-pipeline:
-	@echo "$(GREEN)Indexing$(RESET)"
-	@uv run python -m src index --max_chunk_size 2000
-	@echo "$(GREEN)Searching best chunk for .py files$(RESET)"
-	@uv run python -m src search_dataset \
-		--dataset_path data/datasets/public/UnansweredQuestions/dataset_code_public.json \
-		--k 10 \
-		--save_directory data/output/search_results
-	@echo "$(GREEN)Searching best chunk for .md files$(RESET)"
-	@uv run python -m src search_dataset \
-		--dataset_path data/datasets/public/UnansweredQuestions/dataset_docs_public.json \
-		--k 10 \
-		--save_directory data/output/search_results
-	@echo "$(GREEN)Get answer for .py files$(RESET)"
-	@uv run python -m src answer_dataset \
-		--student_search_results_path data/output/search_results/dataset_code_public.json \
-		--save_directory data/output/search_results_and_answer
-	@echo "$(GREEN)Get answer for .md files$(RESET)"
-	@uv run python -m src answer_dataset \
-		--student_search_results_path data/output/search_results/dataset_docs_public.json \
-		--save_directory data/output/search_results_and_answer
-	@echo "$(GREEN)Evaluate .py files$(RESET)"
-	@uv run python -m src evaluate data/output/search_results/dataset_code_public.json \
-	data/datasets/public/AnsweredQuestions/dataset_code_public.json
-	@echo "$(GREEN)Evaluate .md files$(RESET)"
-	@uv run python -m src evaluate data/output/search_results/dataset_docs_public.json \
-	data/datasets/public/AnsweredQuestions/dataset_docs_public.json
+# --- Coding assistant -------------------------------------------------------
+# Every value can be changed on the command line, e.g.
+#   make serve LLM_MODEL=Qwen/Qwen2.5-Coder-7B-Instruct-AWQ
+#   make assistant PROVIDER=groq ROOT=../my_project
+
+# Local model served by vLLM (make serve)
+LLM_MODEL ?= Qwen/Qwen2.5-Coder-3B-Instruct-AWQ
+LLM_CONTEXT ?= 16384
+LLM_GPU ?= 0.85
+LLM_PORT ?= 8000
+
+# Assistant (make assistant)
+PROVIDER ?= local
+ROOT ?= .
+ARGS ?=
+
+# FlashInfer's sampler does not compile with nvcc 12.0: use vLLM's own.
+serve:
+	@echo "$(BOLD)Serving $(LLM_MODEL) on port $(LLM_PORT)$(RESET)"
+	@echo "$(YELLOW)Ready when 'Application startup complete' shows up$(RESET)"
+	@VLLM_USE_FLASHINFER_SAMPLER=0 uv run vllm serve $(LLM_MODEL) \
+		--max-model-len $(LLM_CONTEXT) \
+		--gpu-memory-utilization $(LLM_GPU) \
+		--enforce-eager \
+		--port $(LLM_PORT)
+
+# LOCAL_LLM_* tell the assistant where the local server is and how big its
+# context is (must match --max-model-len of make serve).
+assistant:
+	@LOCAL_LLM_URL=http://localhost:$(LLM_PORT)/v1 \
+	LOCAL_LLM_CONTEXT=$(LLM_CONTEXT) \
+	uv run python -m src.agent --provider $(PROVIDER) --root $(ROOT) $(ARGS)
+
+assistant-api:
+	@$(MAKE) --no-print-directory -f $(firstword $(MAKEFILE_LIST)) \
+		assistant PROVIDER=groq
+
+# First full indexing on GPU (stop make serve before: the GPU is too small
+# for both). The assistant then reuses the cache and only re-encodes the
+# modified files, on CPU. Use the same ROOT as for make assistant.
+index:
+	@echo "$(BOLD)Indexing $(ROOT) on GPU$(RESET)"
+	@AMBEDING_DEVICE=cuda uv run python -c "\
+	from src.rag.config import AMBEDING_MODEL; \
+	from src.rag.indexer.HybridIndex import HybridIndex; \
+	HybridIndex.from_folder('$(ROOT)', AMBEDING_MODEL)"
+	@echo "$(GREEN)Index ready in data/chunk$(RESET)"
+
+test:
+	@uv run python -m pytest -q
+
+.PHONY: install vllm_compile run serve assistant assistant-api index test lint \
+	debug clean_files clean fclean
+
 
 lint:
 	@echo "$(BOLD)Verifying project source code:$(RESET)"

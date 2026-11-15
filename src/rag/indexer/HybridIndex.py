@@ -4,7 +4,7 @@ When ``USE_EMBEDDING`` is False in config.py, only BM25 is used.
 """
 
 from model import ChunkListModel, ChunkModel
-from ..config import USE_EMBEDDING
+from ..config import AMBEDING_DEVICE, USE_EMBEDDING
 from .indexer import Vectors, chunk_text, update_index
 
 import re
@@ -62,7 +62,8 @@ class HybridIndex:
     @classmethod
     def from_folder(
             cls, folder: str, model_name: str,
-            use_embedding: bool = USE_EMBEDDING) -> "HybridIndex":
+            use_embedding: bool = USE_EMBEDDING,
+            device: str = AMBEDING_DEVICE) -> "HybridIndex":
         """Build the index of *folder*, re-encoding only modified files.
 
         Args:
@@ -70,11 +71,13 @@ class HybridIndex:
             model_name: Hugging Face name of the embedding model.
             use_embedding: False to skip the embedding model entirely
                 (BM25 only: faster, less GPU memory, lower quality).
+            device: Where the embedding model runs ("cpu" or "cuda").
 
         Returns:
             The ready-to-use index.
         """
-        model = SentenceTransformer(model_name) if use_embedding else None
+        model = (SentenceTransformer(model_name, device=device)
+                 if use_embedding else None)
         chunks, vectors = update_index(folder, model, model_name)
         return cls(chunks, vectors, model, folder)
 
@@ -102,7 +105,8 @@ class HybridIndex:
         if self.model is None or self.vectors is None:
             return [self.chunks.chunks[i] for i in bm25_rank[:k]]
 
-        q = self.model.encode(query, normalize_embeddings=True)
+        q = self.model.encode(query, normalize_embeddings=True,
+                              show_progress_bar=False)
         dense_rank = np.argsort(self.vectors @ q)[::-1][:pool]
 
         fused: dict[int, float] = {}

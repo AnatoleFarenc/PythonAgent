@@ -11,6 +11,9 @@ dependencies = [
     "rank_bm25",
     "sentence_transformers",
     "vllm>=0.33.0",
+    "mcp>=2.3.0",
+    "openai>=3.35.1",
+    "python-dotenv>=1.2.4",
 ]
 
 [tool.uv]
@@ -18,6 +21,8 @@ package = true
 
 [project.scripts]
 sandbox = "src.sandbox.cli:main"
+code-mcp = "src.mcp_server.server:main"
+assistant = "src.agent.cli:main"
 
 [build-system]
 requires = ["hatchling"]

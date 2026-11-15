@@ -12,7 +12,7 @@ from pathlib import Path
 import tree_sitter_python as tspython
 import json
 from ..config import (
-    CHUNK_LIMIT_CHARACTER, PYTHON_CHUNK_PATH,
+    CHUNK_LIMIT_CHARACTER, EXCLUDED_DIRS, PYTHON_CHUNK_PATH,
     )
 from model import ChunkListModel, ChunkModel
 
@@ -159,6 +159,9 @@ def get_chunk(path_file: str) -> List[RawChunk]:
 def list_python_files(folder_path: str) -> List[str]:
     """Return every ``.py`` file under *folder_path*, sorted.
 
+    Files inside an ``EXCLUDED_DIRS`` folder (``.venv``, caches...) are
+    skipped.
+
     Args:
         folder_path: Root folder to scan recursively.
 
@@ -166,7 +169,11 @@ def list_python_files(folder_path: str) -> List[str]:
         Sorted file paths.
     """
     root = Path(folder_path)
-    return sorted(str(path) for path in root.rglob("*.py") if path.is_file())
+    return sorted(
+        str(path) for path in root.rglob("*.py")
+        if path.is_file()
+        and not EXCLUDED_DIRS.intersection(path.relative_to(root).parts)
+    )
 
 
 def build_file_chunks(path: str, start_id: int = 0) -> List[ChunkModel]:

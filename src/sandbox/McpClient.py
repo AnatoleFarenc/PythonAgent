@@ -167,7 +167,7 @@ class McpClient:
             mcp_tool = ToolSpec(
                 name=tool.name,
                 description=tool.description or "",
-                input_schema=tool.inputSchema
+                input_schema=tool.input_schema
             )
             mcp_tools[tool.name] = mcp_tool
         return mcp_tools
@@ -193,7 +193,7 @@ class McpClient:
             else:
                 chunk.append(f"{block.type} omitted")
         text = "\n".join(chunk)
-        if result.isError:
+        if result.is_error:
             raise McpToolError(text)
         return text
 
