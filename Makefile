@@ -47,10 +47,10 @@ install:
 run:
 	@uv run python -m src
 
-# --- Coding assistant -------------------------------------------------------
+# --- Local LLM and code index ----------------------------------------------
 # Every value can be changed on the command line, e.g.
 #   make serve LLM_MODEL=Qwen/Qwen2.5-Coder-7B-Instruct-AWQ
-#   make assistant PROVIDER=groq ROOT=../my_project
+#   make index ROOT=../my_project
 
 # Local model served by vLLM (make serve)
 LLM_MODEL ?= Qwen/Qwen2.5-Coder-3B-Instruct-AWQ
@@ -58,10 +58,8 @@ LLM_CONTEXT ?= 16384
 LLM_GPU ?= 0.85
 LLM_PORT ?= 8000
 
-# Assistant (make assistant)
-PROVIDER ?= local
+# Project indexed by make index
 ROOT ?= .
-ARGS ?=
 
 # FlashInfer's sampler does not compile with nvcc 12.0: use vLLM's own.
 serve:
@@ -73,20 +71,9 @@ serve:
 		--enforce-eager \
 		--port $(LLM_PORT)
 
-# LOCAL_LLM_* tell the assistant where the local server is and how big its
-# context is (must match --max-model-len of make serve).
-assistant:
-	@LOCAL_LLM_URL=http://localhost:$(LLM_PORT)/v1 \
-	LOCAL_LLM_CONTEXT=$(LLM_CONTEXT) \
-	uv run python -m src.agent --provider $(PROVIDER) --root $(ROOT) $(ARGS)
-
-assistant-api:
-	@$(MAKE) --no-print-directory -f $(firstword $(MAKEFILE_LIST)) \
-		assistant PROVIDER=groq
-
 # First full indexing on GPU (stop make serve before: the GPU is too small
-# for both). The assistant then reuses the cache and only re-encodes the
-# modified files, on CPU. Use the same ROOT as for make assistant.
+# for both). Later runs reuse the cache and only re-encode the modified
+# files, on CPU.
 index:
 	@echo "$(BOLD)Indexing $(ROOT) on GPU$(RESET)"
 	@AMBEDING_DEVICE=cuda uv run python -c "\
@@ -98,7 +85,7 @@ index:
 test:
 	@uv run python -m pytest -q
 
-.PHONY: install vllm_compile run serve assistant assistant-api index test lint \
+.PHONY: install vllm_compile run serve index test lint \
 	debug clean_files clean fclean
 
 

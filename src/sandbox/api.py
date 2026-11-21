@@ -66,14 +66,12 @@ class Sandbox:
         self._echo = echo
         self._isolation = isolation or IsolationConfig()
         if self._isolation.workspace is not None:
-            # Fail early, before connecting to MCP or starting anything.
             self._isolation = self._isolation.model_copy(update={
                 "workspace": check_workspace(self._isolation.workspace)
             })
         if self._isolation.backend == "local":
             print(f"{RED}WARNING: local backend, the code is NOT isolated "
                   f"from this machine{RESET}", file=sys.stderr)
-        # allowed_directories always matches what is really mounted.
         self.__config = (sandbox_config or SandboxConfig()).model_copy(
             update={"allowed_directories":
                     visible_directories(self._isolation)}

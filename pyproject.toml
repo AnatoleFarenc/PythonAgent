@@ -22,7 +22,6 @@ package = true
 [project.scripts]
 sandbox = "src.sandbox.cli:main"
 code-mcp = "src.mcp_server.server:main"
-assistant = "src.agent.cli:main"
 
 [build-system]
 requires = ["hatchling"]

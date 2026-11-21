@@ -1,4 +1,4 @@
-"""Extraction of Python code from LLM responses (from Agent-Smith)."""
+"""Extraction of executable Python code from LLM responses."""
 import io
 import json
 import re
@@ -91,16 +91,6 @@ def extract_final_answer_call(text: str) -> Optional[str]:
     except Exception:
         pass
     return None
-
-
-def keep_first_block(answer: str) -> str:
-    """Cut an LLM answer right after its first fenced code block."""
-    # Only the first block is executed: any hallucinated follow-up steps
-    # would bloat the context and mislead the model on the next turn
-    match = re.search(r"```[^\n]*\n.*?```", answer, re.DOTALL)
-    if not match:
-        return answer
-    return answer[:match.end()]
 
 
 def extract_code(answer: str) -> Optional[str]:
